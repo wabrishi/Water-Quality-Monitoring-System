@@ -1,0 +1,291 @@
+#include<ESP8266WiFi.h>
+#include<WiFiManager.h>
+#include<DNSServer.h>
+#include<ESP8266WebServer.h>
+#include<MQ135.h>
+#include <SPI.h>
+#include <Wire.h>
+#include <SFE_BMP180.h>
+#include<DHT.h>
+#include <ThingSpeak.h>
+#include <LiquidCrystal_I2C.h>
+#define ALTITUDE 1655.0
+
+#define DHTPIN 14     // esp8266 D5 pin map as 14 in Arduino IDE
+#define DHTTYPE DHT11   // there are multiple kinds of DHT sensors
+#define MQ6_pin 13
+WiFiClient client;
+long myChannelNumber = 2449005;
+const char myWriteAPIKey[] = "XXNUYW95X0E7XG0N";
+
+// String apiKey = "XXNUYW95X0E7XG0N";
+DHT dht(DHTPIN, DHTTYPE);
+
+
+// #ifdef ESP32
+// #pragma message(THIS EXAMPLE IS FOR ESP8266 ONLY!)
+// #error Select ESP8266 board.
+// #endif
+
+
+LiquidCrystal_I2C lcd(0x27,16,2);
+void tempAndPre();
+void gasSensor();
+void myDHT();
+void MQ6_data();
+void Send_data();
+// GLobal variable
+int MQ6_value = 0;
+float pp = 0;
+float TT = 0;
+float air_quality = 0.0;
+float h=0.0;
+float t = 0.0;
+
+
+
+const char* ssid = "Sri Krishna 2.";
+const char* pass = "subbu@123";
+const char* server = "api.thingspeak.com";
+WiFiManager wifi;
+// MQ135 MQData;
+SFE_BMP180 pressure;
+
+void setup() {
+  // put your setup code here, to run once:
+  pinMode(9, OUTPUT);
+  pinMode(10, OUTPUT);
+  lcd.begin(16,2);
+  lcd.init();    
+  lcd.backlight();
+  Serial.begin(115200);
+  while(!Serial) { }
+  dht.begin();
+  delay(10);
+  Serial.println("Connecting to ");
+  Serial.print(ssid);
+  WiFi.begin(ssid, pass);
+  if(WiFi.status() != WL_CONNECTED){
+    wifi.autoConnect("Rishi Raj Singh");
+    Serial.println("connected to wifi");
+  }
+  if (pressure.begin())
+    Serial.println("BMP180 init success");
+  else
+  {
+    // Oops, something went wrong, this is usually a connection problem,
+    // see the comments at the top of this sketch for the proper connections.
+
+    Serial.println("BMP180 init fail\n\n");
+    while(1); // Pause forever.
+  }
+  ThingSpeak.begin(client);
+  // dht.setup(2, DHTesp::DHT11); // D4
+
+}
+
+void loop() {
+  // put your main code here, to run repeatedly:
+  delay(5000);
+  gasSensor();
+  delay(5000);
+  tempAndPre();
+  delay(7000);
+  myDHT();
+  delay(5000);
+  MQ6_data();
+  // delay(5000);
+  // Send_data();
+
+ delay(1000);
+}
+void gasSensor()
+{
+  MQ135 MQData = MQ135(A0);
+  air_quality = MQData.getPPM();
+  lcd.setCursor(1, 0);
+  lcd.print("Air Quality AQI: ");
+  lcd.setCursor(1, 1);
+  lcd.print(air_quality);
+  lcd.print(" PPM          ");
+  Serial.print("Air Quelity AQI: ");
+  Serial.print(air_quality);
+  ThingSpeak.writeField(myChannelNumber, 1, air_quality, myWriteAPIKey);
+  if(air_quality>300)
+  {
+    digitalWrite(9,HIGH);
+  }
+  else if(air_quality>200){
+    digitalWrite(10,HIGH);
+  }else{
+    digitalWrite(9,LOW);
+    digitalWrite(10,LOW);
+  }
+
+}
+
+void tempAndPre()
+{
+  
+  char status;
+  double T,P,p0,a;
+  Serial.println();
+  Serial.print("provided altitude: ");
+  Serial.print(ALTITUDE,0);
+  Serial.print(" meters, ");
+  Serial.print(ALTITUDE*3.28084,0);
+  Serial.println(" feet");
+  
+  status = pressure.startTemperature();
+  if (status != 0)
+  {
+    delay(status);
+    status = pressure.getTemperature(T);
+    if (status != 0)
+    {
+      
+      lcd.setCursor(1, 0);
+      lcd.print("TEMP:");
+      lcd.print(T,2);
+      lcd.print(" °C         ");
+      lcd.setCursor(1, 1);
+      lcd.print((9.0/5.0)*T+32.0,2);
+      lcd.println(" deg F           ");
+      TT = T;
+      ThingSpeak.writeField(myChannelNumber, 2, TT, myWriteAPIKey);
+      
+      status = pressure.startPressure(3);
+      if (status != 0)
+      {
+        delay(status);
+
+        status = pressure.getPressure(P,T);
+        if (status != 0)
+        {
+          pp=P;
+          ThingSpeak.writeField(myChannelNumber, 4, pp, myWriteAPIKey);
+          Serial.print("absolute pressure: ");
+          Serial.print(P,2);
+          Serial.print(" mb, ");
+          Serial.print(P*0.0295333727,2);
+          Serial.println(" inHg");
+
+          lcd.setCursor(1, 0);
+          lcd.print("Abs. Pressure:      ");
+          lcd.setCursor(1, 1);
+          lcd.print(P,2);
+          lcd.print(" hPa              ");
+
+          p0 = pressure.sealevel(P,ALTITUDE);
+          Serial.print("relative (sea-level) pressure: ");
+          Serial.print(p0,2);
+          Serial.print(" mb, ");
+          Serial.print(p0*0.0295333727,2);
+          Serial.println(" inHg");
+
+          a = pressure.altitude(P,p0);
+          Serial.print("computed altitude: ");
+          Serial.print(a,0);
+          Serial.print(" meters, ");
+          Serial.print(a*3.28084,0);
+          Serial.println(" feet");
+        }
+        else Serial.println("error retrieving pressure measurement\n");
+      }
+      else Serial.println("error starting pressure measurement\n");
+    }
+    else Serial.println("error retrieving temperature measurement\n");
+  }
+  else Serial.println("error starting temperature measurement\n");
+}
+
+void myDHT()
+{
+    h = dht.readHumidity();
+    // Read temperature as Celsius (the default)
+    
+    t = dht.readTemperature();
+    
+    // Read temperature as Fahrenheit (isFahrenheit = true)
+    float f = dht.readTemperature(true);
+
+    // Check if any reads failed and exit early (to try again).
+    // if (isnan(h) || isnan(t) || isnan(f)) {
+    //   Serial.println("Failed to read from DHT sensor!");
+    //   timeSinceLastRead = 0;
+    // }
+
+    // // Compute heat index in Fahrenheit (the default)
+    // float hif = dht.computeHeatIndex(f, h);
+    // // Compute heat index in Celsius (isFahreheit = false)
+    // float hic = dht.computeHeatIndex(t, h, false);
+    Serial.print("Humidity: ");
+    Serial.print(h);
+    Serial.print(" %\t");
+    Serial.print("Temperature: ");
+    Serial.print(t);
+    Serial.println(" degC   ");
+    ThingSpeak.writeField(myChannelNumber, 3, h, myWriteAPIKey);
+    lcd.setCursor(1, 0);
+    lcd.print("Humidity:        ");
+    // lcd.print(t,2);
+    // lcd.print(" deg C, ");
+    lcd.setCursor(1, 1);
+    // lcd.print("Humidity:");
+    lcd.print(h,2);
+    lcd.println("  %         ");
+
+}
+
+void MQ6_data()
+{
+  // int analogValue = digitalRead(MQ6_pin);
+  MQ6_value = digitalRead(MQ6_pin);
+  ThingSpeak.writeField(myChannelNumber, 5, (!MQ6_value) , myWriteAPIKey);
+  if(!MQ6_value)
+  {
+    lcd.setCursor(1, 0);
+    lcd.print("!!Warrining!!    ");
+    lcd.setCursor(1, 1);
+    lcd.print("LPG Gas Detected.....    ");
+    Serial.print("LPG Gas Detected.: ");
+    Serial.print(MQ6_value);
+
+  }else
+  {
+    lcd.setCursor(1, 0);
+    lcd.print("NO LPG Gas Detect");
+    lcd.setCursor(1, 1);
+    lcd.print("                ");
+    Serial.print("LPG Gas Detected.: ");
+    Serial.print(MQ6_value);
+  }
+
+
+}
+
+// void Send_data()
+// {
+//   WiFiClient client;
+//   if (client.connect(server,80))
+//   {
+    
+//     // https://api.thingspeak.com/update?api_key=XXNUYW95X0E7XG0N&field1=50&field2=10&field3=10&field4=10&field5=10
+//     String postStr = "https://api.thingspeak.com/update?api_key=" + apiKey + "&field1=" + air_quality + "&field2=" + t + "&field3=" + h + "&field4="+ pp + "&field5="+ MQ6_value +"";
+//     Serial.println(postStr);
+//     client.print("POST /update HTTP/1.1\n");
+//     client.print("Host: api.thingspeak.com\n");
+//     client.print("Connection: close\n");
+//     client.print("X-THINGSPEAKAPIKEY: "+apiKey+"\n");
+//     client.print("Content-Type: application/x-www-form-urlencoded\n");
+//     client.print("Content-Length: ");
+//     client.print(postStr.length());
+//     client.print("\n\n");
+//     client.print(postStr);
+//     Serial.println(postStr);
+//   }
+//   client.stop();
+//   Serial.println("Data Sending to Server...");
+
+// }
+
